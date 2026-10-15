@@ -2,14 +2,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0B1016">
 <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="EcoRuta"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Crect width='34' height='34' rx='8' fill='%230B1016'/%3E%3Cpath d='M17 6 L30 27 L4 27 Z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M8 21 L12 21 L14 16 L17 25 L20 11 L22 21 L27 21' fill='none' stroke='%23F06B5F' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<meta name="apple-mobile-web-app-title" content="EcoRuta"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="icon-192.png">
 <style>html{color-scheme:light}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font-size:14px;font-family:system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head><body><title>EcoRuta</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
 /* Layout: app de estudio con pestañas arriba; una columna de contenido (~760px) y paneles tipo "pantalla de eco" para las imágenes. */
 :root{
@@ -252,6 +250,7 @@ h3.sec{font-size:1.1rem;margin-top:8px}
 .sgrid button{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:12px 14px;text-align:left;display:grid;gap:3px}
 .sgrid button:hover{border-color:var(--blue)}
 .sgrid span{font-size:.86rem;color:var(--muted);line-height:1.4}
+.cloudbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:.9rem;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
@@ -270,6 +269,7 @@ h3.sec{font-size:1.1rem;margin-top:8px}
       <button role="tab" id="t-casos" aria-selected="false" data-v="casos">Casos</button>
       <button role="tab" id="t-exam" aria-selected="false" data-v="exam">Examen</button>
       <button role="tab" id="t-norm" aria-selected="false" data-v="norm">Valores normales</button>
+      <button role="tab" id="t-cuenta" aria-selected="false" data-v="cuenta">Cuenta</button>
     </nav>
     <span class="sync" id="sync">guardado local</span>
   </div>
@@ -1242,6 +1242,113 @@ bulls(el){
 };
 function mountWidgets(root){root.querySelectorAll(".widget[data-w]").forEach(w=>{if(!w.dataset.on&&WIDGETS[w.dataset.w]){w.dataset.on=1;WIDGETS[w.dataset.w](w);}});}
 
+/* ---------- Sincronización con cuenta (Supabase, solo versión instalable) ---------- */
+window.Cloud=(function(){
+  const URL_="https://gnznhgkfslloxieemiig.supabase.co", KEY="sb_publishable_4m6Vy4Jc5lJbObpngmRfQA_LzEGuesW", AK="ecoruta-auth";
+  let auth=null, status="idle", lastSync=0, timer=null, busy=false, msg="";
+  try{auth=JSON.parse(localStorage.getItem(AK)||"null");}catch(e){}
+  const keep=()=>{try{auth?localStorage.setItem(AK,JSON.stringify(auth)):localStorage.removeItem(AK);}catch(e){}};
+  const esc2=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  async function api(path,opt={}){
+    const h=Object.assign({"apikey":KEY,"Content-Type":"application/json"},opt.headers||{});
+    const r=await fetch(URL_+path,Object.assign({},opt,{headers:h}));
+    let body=null; try{body=await r.json();}catch(e){}
+    if(!r.ok){const m=(body&&(body.msg||body.error_description||body.message||body.error))||("Error "+r.status); const err=new Error(m); err.status=r.status; err.code=body&&(body.error_code||body.code); throw err;}
+    return body;
+  }
+  function setSession(b){auth={access:b.access_token,refresh:b.refresh_token,exp:Date.now()+(b.expires_in||3600)*1000-60000,email:b.user&&b.user.email,uid:b.user&&b.user.id}; keep();}
+  async function token(){
+    if(!auth) return null;
+    if(Date.now()<auth.exp) return auth.access;
+    const b=await api("/auth/v1/token?grant_type=refresh_token",{method:"POST",body:JSON.stringify({refresh_token:auth.refresh})});
+    setSession(b); return auth.access;
+  }
+  function merge(a,b){ // a = local, b = remota
+    a=a||{}; b=b||{}; const o=JSON.parse(JSON.stringify(a));
+    o.done=Object.assign({},b.done||{}); for(const k in (a.done||{})) o.done[k]=Math.max(a.done[k]||0,o.done[k]||0);
+    o.seen=JSON.parse(JSON.stringify(b.seen||{})); for(const m in (a.seen||{})){o.seen[m]=Object.assign(o.seen[m]||{},a.seen[m]);}
+    o.cards=Object.assign({},b.cards||{}); for(const k in (a.cards||{})){const x=a.cards[k],y=o.cards[k]; if(!y||((x.t||0)>(y.t||0))||(!x.t&&!y.t&&(x.b||0)>=(y.b||0))) o.cards[k]=x;}
+    o.cases=Object.assign({},b.cases||{}); for(const k in (a.cases||{})){const x=a.cases[k],y=o.cases[k]; if(!y||(x.t||0)>=(y.t||0)) o.cases[k]=x;}
+    const ex={}; [...(b.exams||[]),...(a.exams||[])].forEach(e=>ex[e.d]=e); o.exams=Object.values(ex).sort((p,q)=>p.d-q.d);
+    o.days=Object.assign({},b.days||{},a.days||{});
+    o.free=!!(a.free||b.free);
+    o.updated=Math.max(a.updated||0,b.updated||0);
+    return o;
+  }
+  async function sync(){
+    if(!auth||busy) return; if(!navigator.onLine){status="offline";paint();return;}
+    busy=true; status="syncing"; paint();
+    try{
+      const t=await token();
+      const rows=await api("/rest/v1/ecoruta_progress?select=data,updated_at&user_id=eq."+auth.uid,{headers:{"Authorization":"Bearer "+t}});
+      const remote=rows&&rows[0]?rows[0].data:null;
+      const local=ECO.get(); const merged=merge(local,remote);
+      if(JSON.stringify(merged)!==JSON.stringify(local)) ECO.set(merged);
+      if(!remote||JSON.stringify(merged)!==JSON.stringify(remote)){
+        await api("/rest/v1/ecoruta_progress?on_conflict=user_id",{method:"POST",headers:{"Authorization":"Bearer "+t,"Prefer":"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({user_id:auth.uid,data:merged,updated_at:new Date().toISOString()})});
+      }
+      status="ok"; lastSync=Date.now();
+    }catch(e){
+      if(e.status===400||e.status===401){ if(String(e.message).match(/refresh|token|jwt/i)){auth=null;keep();msg="Tu sesión caducó. Vuelve a entrar.";} }
+      status=navigator.onLine?"error":"offline";
+    }
+    busy=false; paint();
+  }
+  function queue(){ if(!auth) return; clearTimeout(timer); timer=setTimeout(sync,1500); }
+  function label(){
+    if(!auth) return "Sin cuenta: el progreso solo está en este dispositivo.";
+    if(status==="syncing") return "Sincronizando…";
+    if(status==="offline") return "Sin conexión: se guarda aquí y se sincroniza al volver internet.";
+    if(status==="error") return "No se pudo sincronizar. Lo intento de nuevo más tarde.";
+    if(lastSync) return "Sincronizado con "+auth.email+" · "+new Date(lastSync).toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"});
+    return "Conectado como "+auth.email;
+  }
+  function paint(){document.querySelectorAll("[data-cloudlabel]").forEach(e=>e.textContent=label());}
+  function footer(){
+    return `<div class="cloudbar"><span data-cloudlabel>${esc2(label())}</span><button class="btn" data-goto-cuenta>${auth?"Cuenta":"Entrar o crear cuenta"}</button></div>`;
+  }
+  document.addEventListener("click",e=>{if(e.target.closest("[data-goto-cuenta]")) ECO.go("cuenta");});
+  function render(app){
+    if(auth){
+      app.innerHTML=`<section class="view"><button class="back" id="cb">← Volver</button><div><span class="eyebrow">Cuenta</span><h2>Tu progreso en la nube</h2></div>
+      <div class="lesson flow"><p>Conectado como <b>${esc2(auth.email)}</b>.</p><p class="muted" data-cloudlabel>${esc2(label())}</p>
+      <p>Entra con el mismo correo en tu iPad y tu teléfono: el progreso se junta automáticamente. Sin conexión todo sigue funcionando y se sube cuando vuelve internet.</p>
+      <div class="heroact"><button class="btn primary" id="csync">Sincronizar ahora</button><button class="btn" id="cout">Cerrar sesión</button></div>
+      <p class="small muted">Cerrar sesión no borra el progreso de este dispositivo ni el de tu cuenta.</p></div></section>`;
+      app.querySelector("#cb").onclick=()=>ECO.go("ruta");
+      app.querySelector("#csync").onclick=()=>sync();
+      app.querySelector("#cout").onclick=()=>{auth=null;keep();status="idle";render(app);};
+      return;
+    }
+    app.innerHTML=`<section class="view"><button class="back" id="cb">← Volver</button><div><span class="eyebrow">Cuenta</span><h2>Guarda tu progreso en tu cuenta</h2><p class="muted">Así lo ves igual en el iPad, el teléfono y el computador.</p></div>
+      <form class="lesson" id="cf" novalidate>
+        <div class="fields" style="grid-template-columns:1fr">
+          <label for="cemail">Correo<input type="email" id="cemail" autocomplete="email" required style="font-family:var(--f-body)"></label>
+          <label for="cpass">Contraseña (mínimo 6 caracteres)<input type="password" id="cpass" autocomplete="current-password" minlength="6" required style="font-family:var(--f-body)"></label>
+        </div>
+        <p class="small" id="cmsg" role="status">${esc2(msg)}</p>
+        <div class="heroact"><button class="btn primary" type="submit" id="cin">Entrar</button><button class="btn" type="button" id="cup">Crear cuenta nueva</button></div>
+        <p class="small muted">Necesitas internet solo para entrar la primera vez en cada dispositivo.</p>
+      </form></section>`;
+    msg="";
+    const $m=app.querySelector("#cmsg"), em=app.querySelector("#cemail"), pw=app.querySelector("#cpass");
+    app.querySelector("#cb").onclick=()=>ECO.go("ruta");
+    const valid=()=>{if(!em.value.includes("@")){$m.textContent="Escribe un correo válido.";return false;} if(pw.value.length<6){$m.textContent="La contraseña debe tener al menos 6 caracteres.";return false;} return true;};
+    app.querySelector("#cf").onsubmit=async e=>{e.preventDefault(); if(!valid()) return; if(!navigator.onLine){$m.textContent="Necesitas conexión para entrar.";return;}
+      $m.textContent="Entrando…";
+      try{const b=await api("/auth/v1/token?grant_type=password",{method:"POST",body:JSON.stringify({email:em.value.trim(),password:pw.value})}); setSession(b); await sync(); render(app);}
+      catch(err){$m.textContent=/confirm/i.test(err.message)?"Falta confirmar tu correo: abre el enlace que te enviamos y vuelve a entrar.":/invalid/i.test(err.message)?"Correo o contraseña incorrectos.":"No se pudo entrar: "+err.message;}};
+    app.querySelector("#cup").onclick=async()=>{ if(!valid()) return; if(!navigator.onLine){$m.textContent="Necesitas conexión para crear la cuenta.";return;}
+      $m.textContent="Creando cuenta…";
+      try{const b=await api("/auth/v1/signup?redirect_to="+encodeURIComponent(location.origin+location.pathname),{method:"POST",body:JSON.stringify({email:em.value.trim(),password:pw.value})});
+        if(b&&b.access_token){setSession(b); await sync(); render(app);}
+        else $m.textContent="Cuenta creada. Te enviamos un correo de confirmación: ábrelo, toca el enlace y luego vuelve aquí y pulsa Entrar.";}
+      catch(err){$m.textContent=/already|registered|exists/i.test(err.message)?"Ese correo ya tiene cuenta: pulsa Entrar.":/disabled|not allowed/i.test(err.message)?"El registro de cuentas está desactivado en el servidor.":"No se pudo crear la cuenta: "+err.message;}};
+  }
+  function start(){ if(auth) sync(); addEventListener("online",sync); document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible") sync();}); setInterval(()=>{if(auth&&document.visibilityState==="visible") sync();},5*60*1000); }
+  return {queue,sync,footer,render,start,merge};
+})();
+
 /* ---------- Estado y guardado ---------- */
 const LS_KEY="ecoruta-v1";
 const blank=()=>({done:{},seen:{},free:false,cards:{},cases:{},exams:[],days:{},updated:0});
@@ -1254,6 +1361,7 @@ function save(activity=true){
   if(activity) S.days[today()]=1;
   S.updated=Date.now();
   try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
+  if(window.Cloud) Cloud.queue();
   if(!remoteRef) return;
   clearTimeout(saveT);
   saveT=setTimeout(()=>{
@@ -1345,7 +1453,7 @@ function renderRuta(){
     <label class="freebox"><input type="checkbox" id="free" ${S.free?"checked":""}> Abrir todos los módulos sin tener que aprobar el anterior</label>
     <h3 class="sec">Otras secciones</h3>
     <div class="sgrid">${SECTIONS.map(s=>`<button data-goto="${s[0]}"><b>${s[1]}</b><span>${s[2]}</span></button>`).join("")}</div>
-    <p class="small muted">${remoteRef?"Tu progreso se guarda en tu cuenta y lo ves en cualquier dispositivo.":"Tu progreso se guarda en este navegador."}</p>
+    ${window.Cloud?Cloud.footer():`<p class="small muted">${remoteRef?"Tu progreso se guarda en tu cuenta y lo ves en cualquier dispositivo.":"Tu progreso se guarda en este navegador."}</p>`}
   </section>`;
   const g=$("#go"); if(g) g.onclick=()=>{openMod(nx.m.id); cur.step=nx.step; render();};
   app.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>{view=b.dataset.goto;render();window.scrollTo({top:0});});
@@ -1532,7 +1640,7 @@ function renderCards(){
   const fl=$("#flip"); if(fl) fl.onclick=()=>{cardFlip=true;render();};
   app.querySelectorAll("[data-g]").forEach(b=>b.onclick=()=>{const i=due[0]; const st=S.cards[i]||{b:0}; const g=+b.dataset.g;
     const nb= g===0?1 : Math.min(5,(st.b||0)+g); const d= g===0? Date.now() : Date.now()+INT[nb];
-    S.cards[i]={b:nb,due:d}; cardFlip=false; save(); render();});
+    S.cards[i]={b:nb,due:d,t:Date.now()}; cardFlip=false; save(); render();});
 }
 
 /* ---------- Casos ---------- */
@@ -1545,7 +1653,7 @@ function renderCasos(){
       <div class="vitals">${c.v.map(x=>`<span>${esc(x)}</span>`).join("")}</div><p>${esc(c.s)}</p><h4>${esc(c.q)}</h4><div class="opts">${opts}</div>
       ${st?`<div class="expl">${esc(c.e)}</div><button class="toggle" data-reset="${c.id}">Volver a intentar</button>`:""}</article>`;}).join("");
   app.innerHTML=`<section class="view"><div><span class="eyebrow">Casos clínicos</span><h2>Integra lo aprendido</h2><p class="muted">${ok} de ${CASES.length} resueltos correctamente.</p></div>${list}</section>`;
-  app.querySelectorAll("[data-case]").forEach(b=>b.onclick=()=>{const c=CASES.find(x=>x.id===b.dataset.case); const i=+b.dataset.i; S.cases[c.id]={pick:i,ok:i===c.a}; save(); render();});
+  app.querySelectorAll("[data-case]").forEach(b=>b.onclick=()=>{const c=CASES.find(x=>x.id===b.dataset.case); const i=+b.dataset.i; S.cases[c.id]={pick:i,ok:i===c.a,t:Date.now()}; save(); render();});
   app.querySelectorAll("[data-reset]").forEach(b=>b.onclick=()=>{delete S.cases[b.dataset.reset]; save(false); render();});
 }
 
@@ -1602,9 +1710,12 @@ function render(){
   else if(view==="casos") renderCasos();
   else if(view==="exam") renderExam();
   else if(view==="norm") renderNorm();
+  else if(view==="cuenta"&&window.Cloud) Cloud.render(app);
   mountWidgets(app);
 }
+window.ECO={get:()=>S,set:x=>{S=Object.assign(blank(),x);try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){} render();},go:v=>{view=v;render();window.scrollTo({top:0});}};
 render();
+if(window.Cloud) Cloud.start();
 
 </script>
 <script>if("serviceWorker" in navigator){addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist();}catch(e){}</script></body></html>
